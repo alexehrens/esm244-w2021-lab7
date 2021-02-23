@@ -1,0 +1,130 @@
+---
+title: "Part 2 - The Hobbit text analysis"
+author: "Alex Ehrens"
+date: "2/22/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(tidytext)
+library(textdata)
+library(pdftools)
+library(ggwordcloud)
+```
+
+```{r, cache = TRUE}
+hobbit_text <- pdf_text("the-hobbit.pdf")
+
+hobbit_text_p34 <- hobbit_text[34] ## takes 34th element of hobbit_text, which is page 34 --> each element is a page of text
+hobbit_text_p34 # very not tidy
+```
+
+```{r}
+hobbit_tidy <- data.frame(hobbit_text) %>% 
+  mutate(text_full = str_split(hobbit_text, pattern = "\\n")) %>% # R already has meaning for \, so need to read it in as a character by putting \ in front of it
+  unnest(text_full) %>% # makes each element its own row (as in each line)
+  mutate(text_full = str_trim(text_full)) # removes white spaces
+```
+
+```{r}
+hobbit_df <- hobbit_tidy %>% 
+  slice(-(1:125)) %>% # remove first 125 pages to get to chapter 1
+  mutate(chapter = case_when(
+    str_detect(text_full, pattern = "Chapter") ~ text_full,
+    TRUE ~ NA_character_ # if anything else is true - need to specify class of NA as character in this case
+  )) %>% 
+  fill(chapter) %>% # fills all NA's below each populated chapter value - needs to be in correct order (it is in this case)
+  separate(col = chapter, into = c("ch", "no"), sep = " ") %>% # separate out chapter and number so that Roman numerals can be converted into numeric
+  mutate(chapter = as.numeric(as.roman(no))) # converts roman numeral to numeric
+```
+
+```{r}
+hobbit_tokens <- hobbit_df %>% 
+  unnest_tokens(word, text_full) %>% # unnests each word as individual token or row
+  select(-hobbit_text) # if error says "can't find method for using function", need to be explicit about which package you want function to come from
+
+hobbit_wordcount <- hobbit_tokens %>% 
+  count(chapter, word) # counts number of each word in each chapter
+```
+
+### Remove all stop_words that exist in hobbit_token
+
+```{r}
+hobbit_nonstop_words <- hobbit_tokens %>% 
+  anti_join(stop_words) # anti_join used to tell it what we don't want to keep - not keeping stop_words
+
+nonstop_counts <- hobbit_nonstop_words %>% 
+  count(chapter, word)
+```
+
+```{r}
+# filters out top 5 word counts from each chapter
+top_5_words <- nonstop_counts %>% 
+  group_by(chapter) %>% 
+  arrange(-n) %>% 
+  slice(1:5)
+
+ggplot(data = top_5_words, aes(x = word, y = n)) +
+  geom_col(fill = "blue") +
+  facet_wrap(~chapter, scales = "free") +
+  coord_flip()
+```
+
+```{r}
+# get top 100 word counts for chapter 1
+ch1_top100 <- nonstop_counts %>% 
+  filter(chapter == 1) %>% 
+  arrange(-n) %>% 
+  slice(1:100)
+
+# create a word cloud
+ch1_cloud <- ggplot(data = ch1_top100, aes(label = word)) +
+  geom_text_wordcloud(aes(color = n, size = n)) +
+  scale_size_area(max_size = 6)
+
+ch1_cloud
+```
+
+## Sentiment analysis
+```{r}
+afinn_pos <- get_sentiments("afinn") %>% 
+  filter(value > 2) # lexicon has sentiment scores ranked in 'value' column
+
+```
+
+### With `afinn`
+
+```{r}
+hobbit_afinn <- hobbit_nonstop_words %>% 
+  inner_join(get_sentiments("afinn")) # only joins by words contained in both hobbit_nonstop_words and "afinn" lexicon
+
+afinn_counts <- hobbit_afinn %>% 
+  count(chapter, value)
+
+afinn_means <- hobbit_afinn %>% 
+  group_by(chapter) %>% 
+  summarize(mean_afinn = mean(value))
+
+ggplot(data = afinn_means, 
+       aes(x = chapter, y = mean_afinn)) +
+  geom_col() +
+  coord_flip()
+```
+
+### Now look using NRC lexicon
+
+```{r}
+hobbit_nrc <- hobbit_nonstop_words %>% 
+  inner_join(get_sentiments("nrc"))
+
+hobbit_nrc_counts <- hobbit_nrc %>% 
+  count(chapter, sentiment)
+
+ggplot(data = hobbit_nrc_counts, aes(x = sentiment, y = n)) +
+  geom_col() +
+  facet_wrap(~chapter) +
+  coord_flip()
+```
+
